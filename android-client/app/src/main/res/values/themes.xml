@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Thème principal de l'application (sombre) -->
+    <style name="Theme.ScreenShare" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#6C63FF</item>
+        <item name="colorPrimaryVariant">#4A42C0</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorSecondary">#8B5CF6</item>
+        <item name="colorSecondaryVariant">#7C3AED</item>
+        <item name="colorOnSecondary">#FFFFFF</item>
+        <item name="android:statusBarColor">#1A1A2E</item>
+        <item name="android:navigationBarColor">#1A1A2E</item>
+        <item name="android:windowBackground">#1A1A2E</item>
+    </style>
+
+    <!-- Thème plein écran pour le lecteur vidéo -->
+    <style name="Theme.ScreenShare.Fullscreen" parent="Theme.ScreenShare">
+        <item name="android:windowFullscreen">true</item>
+        <item name="windowNoTitle">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+    </style>
+</resources>

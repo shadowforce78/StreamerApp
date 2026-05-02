@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Bouton de connexion avec dégradé violet -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- État désactivé -->
+    <item android:state_enabled="false">
+        <shape android:shape="rectangle">
+            <corners android:radius="12dp" />
+            <solid android:color="#444466" />
+        </shape>
+    </item>
+
+    <!-- État pressé -->
+    <item android:state_pressed="true">
+        <shape android:shape="rectangle">
+            <corners android:radius="12dp" />
+            <gradient
+                android:startColor="#4A42C0"
+                android:endColor="#5B51E0"
+                android:angle="135" />
+        </shape>
+    </item>
+
+    <!-- État par défaut -->
+    <item>
+        <shape android:shape="rectangle">
+            <corners android:radius="12dp" />
+            <gradient
+                android:startColor="#6C63FF"
+                android:endColor="#8B5CF6"
+                android:angle="135" />
+        </shape>
+    </item>
+
+</selector>

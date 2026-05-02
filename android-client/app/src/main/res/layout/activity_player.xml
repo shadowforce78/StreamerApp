@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ═══════════════════════════════════════════════════════════════════
+     activity_player.xml — Écran de lecture vidéo en plein écran
+     ═══════════════════════════════════════════════════════════════════
+     - SurfaceView pour le rendu vidéo libVLC
+     - Un overlay semi-transparent pour les messages de statut
+     - Un bouton de déconnexion en haut à droite
+-->
+<FrameLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <!-- ══════════════════════════════════════════════════════════
+         Surface de rendu vidéo pour libVLC.
+         libVLC dessine directement sur un SurfaceView natif,
+         ce qui est optimal pour la latence (pas de couche OpenGL).
+    ══════════════════════════════════════════════════════════ -->
+    <SurfaceView
+        android:id="@+id/videoSurface"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- ── Overlay de statut (buffering, erreurs) ── -->
+    <TextView
+        android:id="@+id/statusOverlay"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:text="Connexion au flux..."
+        android:textColor="#FFFFFF"
+        android:textSize="18sp"
+        android:background="#88000000"
+        android:padding="16dp"
+        android:visibility="gone" />
+
+    <!-- ── Bouton de déconnexion (coin supérieur droit) ── -->
+    <ImageButton
+        android:id="@+id/disconnectButton"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_gravity="top|end"
+        android:layout_margin="16dp"
+        android:src="@android:drawable/ic_menu_close_clear_cancel"
+        android:background="@drawable/button_disconnect"
+        android:contentDescription="Déconnecter"
+        android:scaleType="centerInside"
+        android:padding="8dp" />
+
+</FrameLayout>
