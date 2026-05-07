@@ -11,37 +11,30 @@ import android.widget.ImageButton
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import java.io.File
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
-import java.io.File
 
 /**
- * ══════════════════════════════════════════════════════════════════════════
- *  PlayerActivity — Lecture du flux vidéo RTP/UDP en plein écran via libVLC
+ * ══════════════════════════════════════════════════════════════════════════ PlayerActivity —
+ * Lecture du flux vidéo RTP/UDP en plein écran via libVLC
  * ══════════════════════════════════════════════════════════════════════════
  *
- * ┌───────────────────────────────────────────────────────────────────────┐
- * │  POURQUOI UN FICHIER SDP ?                                          │
- * ├───────────────────────────────────────────────────────────────────────┤
- * │                                                                     │
- * │  Le serveur utilise rtph264pay avec pt=96 (payload type dynamique). │
- * │  VLC ne peut pas deviner que pt=96 = H.264 sans un SDP.            │
- * │  L'URI rtp://@:5000 ne fonctionne PAS avec les types dynamiques.   │
- * │                                                                     │
- * │  Solution : On génère un fichier SDP minimal qui décrit le flux :  │
- * │    m=video 5000 RTP/AVP 96                                         │
- * │    a=rtpmap:96 H264/90000                                          │
- * │                                                                     │
- * │  VLC lit ce SDP, comprend que pt=96 = H.264 à 90kHz, et sait      │
- * │  comment dépaquetiser et décoder le flux RTP entrant.              │
+ * ┌───────────────────────────────────────────────────────────────────────┐ │ POURQUOI UN FICHIER
+ * SDP ? │ ├───────────────────────────────────────────────────────────────────────┤ │ │ │ Le
+ * serveur utilise rtph264pay avec pt=96 (payload type dynamique). │ │ VLC ne peut pas deviner que
+ * pt=96 = H.264 sans un SDP. │ │ L'URI rtp://@:5000 ne fonctionne PAS avec les types dynamiques. │
+ * │ │ │ Solution : On génère un fichier SDP minimal qui décrit le flux : │ │ m=video 5000 RTP/AVP
+ * 96 │ │ a=rtpmap:96 H264/90000 │ │ │ │ VLC lit ce SDP, comprend que pt=96 = H.264 à 90kHz, et sait
+ * │ │ comment dépaquetiser et décoder le flux RTP entrant. │
  * └───────────────────────────────────────────────────────────────────────┘
  *
- * ⚠️  THREAD SAFETY :
- *   - SurfaceHolder.Callback : la lecture démarre dans surfaceCreated()
- *   - Les événements VLC arrivent depuis un thread interne VLC
- *   - L'envoi de STOP se fait dans un thread éphémère (CommandSender)
- *   - Toute modification de l'UI passe par runOnUiThread{}
+ * ⚠️ THREAD SAFETY :
+ * - SurfaceHolder.Callback : la lecture démarre dans surfaceCreated()
+ * - Les événements VLC arrivent depuis un thread interne VLC
+ * - L'envoi de STOP se fait dans un thread éphémère (CommandSender)
+ * - Toute modification de l'UI passe par runOnUiThread{}
  */
 class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
@@ -71,8 +64,7 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private var serverName: String = ""
 
     // ── État ──
-    @Volatile
-    private var surfaceReady = false
+    @Volatile private var surfaceReady = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -112,82 +104,82 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
     }
 
     /**
-     * Crée l'instance libVLC et le MediaPlayer avec les options
-     * optimisées pour la basse latence.
+     * Crée l'instance libVLC et le MediaPlayer avec les options optimisées pour la basse latence.
      */
     private fun initializeLibVLC() {
         Log.i(TAG, "🎬 Initialisation de libVLC")
 
-        val vlcOptions = arrayListOf(
-            // ══════════════════════════════════════════════════════
-            //  CACHING = 0 → Latence minimale absolue
-            // ══════════════════════════════════════════════════════
-            // Pas de buffering réseau ni de cache live.
-            // Le flux est affiché dès réception des paquets.
-            "--network-caching=0",
-            "--live-caching=0",
-            "--file-caching=0",
-            "--sout-mux-caching=0",
+        val vlcOptions =
+                arrayListOf(
+                        // ══════════════════════════════════════════════════════
+                        //  CACHING = 150 → Le "Sweet Spot" pour MediaCodec + UDP
+                        // ══════════════════════════════════════════════════════
+                        // Laisse juste le temps d'assembler les fragments UDP d'une frame
+                        "--network-caching=150",
+                        "--live-caching=150",
+                        "--file-caching=150",
+                        "--sout-mux-caching=150",
 
-            // ── Pas de synchro horloge (affichage immédiat) ──
-            "--clock-jitter=0",
-            "--clock-synchro=0",
+                        // ── Pas de synchro horloge stricte ──
+                        "--clock-jitter=0",
+                        "--clock-synchro=0",
 
-            // ══════════════════════════════════════════════════════
-            //  DÉCODAGE RAPIDE — Sacrifier la qualité pour la vitesse
-            // ══════════════════════════════════════════════════════
-            // Désactiver le filtre de déblocking (gros gain CPU)
-            "--avcodec-skiploopfilter=4",
-            // Autoriser le drop de frames en retard
-            "--drop-late-frames",
-            "--skip-frames",
+                        // ══════════════════════════════════════════════════════
+                        //  DÉCODAGE RAPIDE — Excellent choix ici !
+                        // ══════════════════════════════════════════════════════
+                        // Désactiver le filtre de déblocking (gros gain CPU)
+                        "--avcodec-skiploopfilter=4",
+                        // Autoriser le drop de frames en retard (CRUCIAL)
+                        "--drop-late-frames",
+                        "--skip-frames",
 
-            // ── Pas d'audio (flux vidéo uniquement) ──
-            "--no-audio"
-        )
+                        // ── Pas d'audio (flux vidéo uniquement) ──
+                        "--no-audio"
+                )
 
         try {
             libVLC = LibVLC(this, vlcOptions)
 
-            mediaPlayer = MediaPlayer(libVLC).apply {
-                // ⚠️ Events arrivent depuis un thread VLC !
-                setEventListener { event ->
-                    when (event.type) {
-                        MediaPlayer.Event.Playing -> {
-                            Log.i(TAG, "▶️ Lecture en cours")
-                            runOnUiThread { statusOverlay.visibility = View.GONE }
-                        }
-                        MediaPlayer.Event.Buffering -> {
-                            val percent = event.buffering
-                            Log.d(TAG, "⏳ Buffering: ${percent}%")
-                            runOnUiThread {
-                                if (percent >= 99f) {
-                                    // Buffering terminé → masquer l'overlay
-                                    statusOverlay.visibility = View.GONE
-                                } else if (percent < 50f) {
-                                    // Afficher uniquement quand le buffering est significatif
-                                    // (évite le flash "99%" pendant la lecture normale)
-                                    statusOverlay.text = "Buffering ${percent.toInt()}%..."
-                                    statusOverlay.visibility = View.VISIBLE
+            mediaPlayer =
+                    MediaPlayer(libVLC).apply {
+                        // ⚠️ Events arrivent depuis un thread VLC !
+                        setEventListener { event ->
+                            when (event.type) {
+                                MediaPlayer.Event.Playing -> {
+                                    Log.i(TAG, "▶️ Lecture en cours")
+                                    runOnUiThread { statusOverlay.visibility = View.GONE }
+                                }
+                                MediaPlayer.Event.Buffering -> {
+                                    val percent = event.buffering
+                                    Log.d(TAG, "⏳ Buffering: ${percent}%")
+                                    runOnUiThread {
+                                        if (percent >= 99f) {
+                                            // Buffering terminé → masquer l'overlay
+                                            statusOverlay.visibility = View.GONE
+                                        } else if (percent < 50f) {
+                                            // Afficher uniquement quand le buffering est
+                                            // significatif
+                                            // (évite le flash "99%" pendant la lecture normale)
+                                            statusOverlay.text = "Buffering ${percent.toInt()}%..."
+                                            statusOverlay.visibility = View.VISIBLE
+                                        }
+                                    }
+                                }
+                                MediaPlayer.Event.EncounteredError -> {
+                                    Log.e(TAG, "❌ Erreur de lecture VLC")
+                                    runOnUiThread {
+                                        statusOverlay.text = "Erreur de lecture vidéo"
+                                        statusOverlay.visibility = View.VISIBLE
+                                    }
+                                }
+                                MediaPlayer.Event.Stopped -> {
+                                    Log.i(TAG, "⏹️ Lecture arrêtée")
                                 }
                             }
                         }
-                        MediaPlayer.Event.EncounteredError -> {
-                            Log.e(TAG, "❌ Erreur de lecture VLC")
-                            runOnUiThread {
-                                statusOverlay.text = "Erreur de lecture vidéo"
-                                statusOverlay.visibility = View.VISIBLE
-                            }
-                        }
-                        MediaPlayer.Event.Stopped -> {
-                            Log.i(TAG, "⏹️ Lecture arrêtée")
-                        }
                     }
-                }
-            }
 
             Log.i(TAG, "✅ libVLC et MediaPlayer créés")
-
         } catch (e: Exception) {
             Log.e(TAG, "❌ Erreur d'initialisation de libVLC : ${e.message}", e)
             runOnUiThread {
@@ -200,25 +192,23 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
     /**
      * Génère un fichier SDP décrivant le flux RTP H.264 entrant.
      *
-     * ══════════════════════════════════════════════════════════════
-     *  POURQUOI C'EST NÉCESSAIRE
+     * ══════════════════════════════════════════════════════════════ POURQUOI C'EST NÉCESSAIRE
      * ══════════════════════════════════════════════════════════════
      *
-     * Le serveur GStreamer utilise rtph264pay avec pt=96 (dynamique).
-     * Les payload types 96-127 sont "dynamiques" dans le standard RTP,
-     * ce qui signifie que leur signification (quel codec ?) n'est PAS
-     * définie par le numéro seul — il faut un SDP pour le spécifier.
+     * Le serveur GStreamer utilise rtph264pay avec pt=96 (dynamique). Les payload types 96-127 sont
+     * "dynamiques" dans le standard RTP, ce qui signifie que leur signification (quel codec ?)
+     * n'est PAS définie par le numéro seul — il faut un SDP pour le spécifier.
      *
-     * Le SDP contient la ligne cruciale :
-     *   a=rtpmap:96 H264/90000
-     * qui dit : "payload type 96 = codec H.264, clock rate 90kHz"
+     * Le SDP contient la ligne cruciale : a=rtpmap:96 H264/90000 qui dit : "payload type 96 = codec
+     * H.264, clock rate 90kHz"
      *
      * @return Le chemin absolu du fichier SDP généré
      */
     private fun generateSdpFile(): String {
         // ── Contenu SDP minimal mais complet ──
         // Chaque ligne est spécifiée par le RFC 4566 (SDP) et RFC 6184 (RTP H.264)
-        val sdpContent = """
+        val sdpContent =
+                """
             v=0
             o=- 0 0 IN IP4 127.0.0.1
             s=ScreenShare
@@ -251,14 +241,8 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
         Log.i(TAG, "🎬 Attachement de la surface et démarrage de la lecture")
 
         // ── Attacher le VOut à la surface ──
-        mp.vlcVout.setVideoSurface(
-            videoSurface.holder.surface,
-            videoSurface.holder
-        )
-        mp.vlcVout.setWindowSize(
-            videoSurface.width,
-            videoSurface.height
-        )
+        mp.vlcVout.setVideoSurface(videoSurface.holder.surface, videoSurface.holder)
+        mp.vlcVout.setWindowSize(videoSurface.width, videoSurface.height)
         mp.vlcVout.attachViews()
 
         // ══════════════════════════════════════════════════════════
@@ -268,12 +252,13 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
         val sdpUri = Uri.fromFile(File(sdpPath))
         Log.i(TAG, "📺 Ouverture du SDP : $sdpUri")
 
-        val media = Media(vlc, sdpUri).apply {
-            addOption(":network-caching=0")
-            addOption(":live-caching=0")
-            addOption(":clock-jitter=0")
-            addOption(":clock-synchro=0")
-        }
+        val media =
+                Media(vlc, sdpUri).apply {
+                    addOption(":network-caching=0")
+                    addOption(":live-caching=0")
+                    addOption(":clock-jitter=0")
+                    addOption(":clock-synchro=0")
+                }
 
         mp.media = media
         media.release() // libVLC fait une copie interne
@@ -314,13 +299,14 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private fun onDisconnectClicked() {
         Log.i(TAG, "🔌 Déconnexion...")
 
-        val server = ServerInfo(
-            app = "MonAppScreenShare",
-            name = serverName,
-            ip = serverIp,
-            commandPort = commandPort,
-            videoPort = videoPort
-        )
+        val server =
+                ServerInfo(
+                        app = "MonAppScreenShare",
+                        name = serverName,
+                        ip = serverIp,
+                        commandPort = commandPort,
+                        videoPort = videoPort
+                )
 
         CommandSender.sendStop(server) { success, message ->
             runOnUiThread {
@@ -361,14 +347,13 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     @Suppress("DEPRECATION")
     private fun hideSystemUI() {
-        window.decorView.systemUiVisibility = (
-            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-            or View.SYSTEM_UI_FLAG_FULLSCREEN
-            or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-            or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-            or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-            or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-        )
+        window.decorView.systemUiVisibility =
+                (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                        View.SYSTEM_UI_FLAG_FULLSCREEN or
+                        View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                        View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                        View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                        View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION)
     }
 
     // ══════════════════════════════════════════════════════════════════
