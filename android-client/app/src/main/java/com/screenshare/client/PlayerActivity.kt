@@ -119,18 +119,31 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
         Log.i(TAG, "🎬 Initialisation de libVLC")
 
         val vlcOptions = arrayListOf(
-            // ── Caching minimal pour basse latence ──
-            "--network-caching=150",
-            "--live-caching=150",
-            "--file-caching=150",
-            "--sout-mux-caching=150",
+            // ══════════════════════════════════════════════════════
+            //  CACHING = 0 → Latence minimale absolue
+            // ══════════════════════════════════════════════════════
+            // Pas de buffering réseau ni de cache live.
+            // Le flux est affiché dès réception des paquets.
+            "--network-caching=0",
+            "--live-caching=0",
+            "--file-caching=0",
+            "--sout-mux-caching=0",
 
-            // ── Pas de synchro horloge (temps réel) ──
+            // ── Pas de synchro horloge (affichage immédiat) ──
             "--clock-jitter=0",
             "--clock-synchro=0",
 
-            // ── Verbose pour le debug ──
-            "-vvv"
+            // ══════════════════════════════════════════════════════
+            //  DÉCODAGE RAPIDE — Sacrifier la qualité pour la vitesse
+            // ══════════════════════════════════════════════════════
+            // Désactiver le filtre de déblocking (gros gain CPU)
+            "--avcodec-skiploopfilter=4",
+            // Autoriser le drop de frames en retard
+            "--drop-late-frames",
+            "--skip-frames",
+
+            // ── Pas d'audio (flux vidéo uniquement) ──
+            "--no-audio"
         )
 
         try {
@@ -256,7 +269,8 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
         Log.i(TAG, "📺 Ouverture du SDP : $sdpUri")
 
         val media = Media(vlc, sdpUri).apply {
-            addOption(":network-caching=150")
+            addOption(":network-caching=0")
+            addOption(":live-caching=0")
             addOption(":clock-jitter=0")
             addOption(":clock-synchro=0")
         }

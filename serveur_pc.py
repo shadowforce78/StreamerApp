@@ -44,22 +44,81 @@ shutdown_event = threading.Event()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  1. LE PHARE — Broadcast UDP de découverte
+#  1. LE PHARE — Broadcast UDP de découverte (multi-interface)
 # ═══════════════════════════════════════════════════════════════════════════
+
+def _get_broadcast_addresses():
+    """
+    Détecte toutes les adresses de broadcast de toutes les interfaces réseau.
+    Fonctionne avec les interfaces LAN classiques ET les tunnels VPN (WireGuard).
+
+    WireGuard (wg0) n'a pas d'adresse broadcast native car c'est du Layer 3
+    point-à-point. On calcule le broadcast à partir de l'IP et du masque.
+
+    Retourne une liste de tuples (interface_name, broadcast_address).
+    """
+    import ipaddress
+
+    broadcasts = []
+
+    try:
+        # Utilise `ip -j addr show` pour obtenir les infos réseau en JSON
+        result = subprocess.run(
+            ["ip", "-j", "addr", "show"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode != 0:
+            return [("fallback", BROADCAST_ADDR)]
+
+        interfaces = json.loads(result.stdout)
+
+        for iface in interfaces:
+            name = iface.get("ifname", "?")
+            # Ignorer loopback
+            if name == "lo":
+                continue
+
+            for addr_info in iface.get("addr_info", []):
+                if addr_info.get("family") != "inet":
+                    continue  # IPv4 uniquement
+
+                local_ip = addr_info.get("local", "")
+                prefix_len = addr_info.get("prefixlen", 24)
+                brd = addr_info.get("broadcast")
+
+                if brd:
+                    # L'interface a une adresse broadcast native (LAN classique)
+                    broadcasts.append((name, brd))
+                elif local_ip:
+                    # Pas de broadcast (WireGuard, tunnel) → calculer depuis le subnet
+                    try:
+                        network = ipaddress.IPv4Network(
+                            f"{local_ip}/{prefix_len}", strict=False
+                        )
+                        computed_brd = str(network.broadcast_address)
+                        broadcasts.append((name, computed_brd))
+                    except ValueError:
+                        pass
+
+    except Exception as e:
+        print(f"[Phare] ⚠ Erreur détection interfaces : {e}")
+
+    # Toujours inclure le broadcast global en fallback
+    if not broadcasts:
+        broadcasts.append(("fallback", BROADCAST_ADDR))
+
+    return broadcasts
+
+
 def start_broadcast():
     """
-    Annonce la présence du serveur sur le réseau local en diffusant
-    un message JSON en UDP Broadcast toutes les BROADCAST_INTERVAL secondes.
+    Annonce la présence du serveur sur TOUTES les interfaces réseau.
 
-    Le message contient :
-      - app           : Identifiant de l'application (pour filtrage côté client)
-      - name          : Nom lisible du serveur
-      - command_port  : Port où envoyer START/STOP
-      - video_port    : Port où le flux vidéo sera émis
+    Envoie le JSON de découverte en UDP vers l'adresse broadcast de chaque
+    interface détectée (LAN, WiFi, WireGuard, etc.).
     """
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    # Timeout pour vérifier le shutdown_event régulièrement
     sock.settimeout(BROADCAST_INTERVAL)
 
     message = json.dumps({
@@ -69,14 +128,29 @@ def start_broadcast():
         "video_port": VIDEO_PORT
     }).encode('utf-8')
 
+    # Détection initiale des interfaces
+    broadcast_targets = _get_broadcast_addresses()
+    iface_list = ", ".join(f"{name}→{addr}" for name, addr in broadcast_targets)
     print(f"[Phare] 📡 Broadcast actif sur :{BROADCAST_PORT} (toutes les {BROADCAST_INTERVAL}s)")
+    print(f"[Phare]    Interfaces : {iface_list}")
+
+    refresh_counter = 0
 
     while not shutdown_event.is_set():
-        try:
-            sock.sendto(message, (BROADCAST_ADDR, BROADCAST_PORT))
-        except OSError as e:
-            print(f"[Phare] ⚠ Erreur d'envoi : {e}")
-        # On dort par petits intervalles pour pouvoir réagir au shutdown
+        # Rafraîchir la liste des interfaces toutes les 30 secondes
+        # (utile si le VPN se connecte/déconnecte)
+        refresh_counter += 1
+        if refresh_counter >= 15:  # 15 * 2s = 30s
+            broadcast_targets = _get_broadcast_addresses()
+            refresh_counter = 0
+
+        for iface_name, brd_addr in broadcast_targets:
+            try:
+                sock.sendto(message, (brd_addr, BROADCAST_PORT))
+            except OSError as e:
+                # Certaines interfaces peuvent être down → pas grave
+                pass
+
         shutdown_event.wait(timeout=BROADCAST_INTERVAL)
 
     sock.close()
@@ -125,8 +199,9 @@ def _detect_encoder():
             # target-usage=7 : vitesse maximale (1=qualité, 7=vitesse)
             # rate-control=cqp : quantization constante (pas de buffering de bitrate)
             # ref-frames=1 : une seule frame de référence (moins de latence)
-            # key-int-max=30 : keyframe toutes les 30 frames
-            ["vah264enc", "target-usage=7", "rate-control=cqp", "ref-frames=1", "key-int-max=30"],
+            # key-int-max=60 : keyframe toutes les 60 frames (2s à 30fps)
+            # aud=false : pas de délimiteurs AU (économise quelques octets/frame)
+            ["vah264enc", "target-usage=7", "rate-control=cqp", "ref-frames=1", "key-int-max=60", "aud=false"],
             "VA-API (AMD/Intel)"
         )
 
@@ -180,18 +255,33 @@ def start_gstreamer(client_ip: str):
 
         print(f"[GStreamer] 🔍 Encodeur détecté : {encoder_name}")
 
-        # Construction de la commande GStreamer
-        # Le "queue" entre l'encodeur et le payloader résout le warning
-        # "not enough buffering available for the processing deadline"
+        # ══════════════════════════════════════════════════════════════
+        #  PIPELINE OPTIMISÉ POUR LA LATENCE MINIMALE
+        # ══════════════════════════════════════════════════════════════
+        #
+        # Optimisations appliquées :
+        #   1. videoscale → 1280x720 : réduit la charge GPU de ~75%
+        #   2. 30fps : suffisant pour un film, divise le débit par 2
+        #   3. queue max-size-buffers=1 : pas de buffering interne
+        #   4. udpsink sync=false : envoie immédiatement sans attendre
+        #
         cmd = [
             "gst-launch-1.0",
-            "ximagesrc", "!",
-            "video/x-raw,framerate=60/1", "!",
+            # ── Capture d'écran ──
+            "ximagesrc", "use-damage=false", "!",
+            # ── Limiter le framerate AVANT tout traitement ──
+            "video/x-raw,framerate=30/1", "!",
+            # ── Conversion colorimétrique ──
             "videoconvert", "!",
+            # ── Redimensionner en 720p (réduit la charge encodeur) ──
+            "videoscale", "!",
+            "video/x-raw,width=1280,height=720", "!",
         ] + encoder_elements + [
-            "!", "queue", "!",
+            # ── Queue minimale (1 seul buffer, pas de latence ajoutée) ──
+            "!", "queue", "max-size-buffers=1", "max-size-bytes=0", "max-size-time=0", "!",
+            # ── Empaquetage RTP avec envoi immédiat ──
             "rtph264pay", "config-interval=1", "pt=96", "!",
-            "udpsink", f"host={client_ip}", f"port={VIDEO_PORT}"
+            "udpsink", f"host={client_ip}", f"port={VIDEO_PORT}", "sync=false"
         ]
 
         print(f"[GStreamer] 🚀 Lancement du pipeline → {client_ip}:{VIDEO_PORT}")
